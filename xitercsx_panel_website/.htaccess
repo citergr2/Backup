@@ -1,0 +1,4 @@
+Options -Indexes
+<FilesMatch "^(config\.php|lib\.php|orders\.json)$">
+  Require all denied
+</FilesMatch>

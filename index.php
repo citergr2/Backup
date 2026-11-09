@@ -1,0 +1,233 @@
+<?php
+declare(strict_types=1);
+require __DIR__ . '/lib.php';
+
+$notice = $_SESSION['flash'] ?? null;
+unset($_SESSION['flash']);
+$view = (string)($_GET['view'] ?? 'home');
+$invoiceQuery = trim((string)($_GET['invoice'] ?? ''));
+$products = [
+    [
+        'productId' => '1Gb',
+        'name' => 'Panel 1Gb',
+        'price' => 5000,
+        'description' => 'Paket Perminggu. Dengan VPS premium dan LEGAL',
+        'stock' => 'Tersedia',
+    ],
+     [
+        'productId' => '2Gb',
+        'name' => 'Panel 2Gb',
+        'price' => 7000,
+        'description' => 'Paket Perminggu. Dengan VPS premium dan LEGAL',
+        'stock' => 'Tersedia',
+    ],
+    [
+        'productId' => '3Gb',
+        'name' => 'Panel 3Gb',
+        'price' => 9000,
+        'description' => 'Paket Perminggu. Dengan VPS premium dan LEGAL',
+        'stock' => 'Tersedia',
+    ],
+    [
+        'productId' => '4Gb',
+        'name' => 'Panel 4Gb',
+        'price' => 11000,
+        'description' => 'Paket Perminggu. Dengan VPS premium dan LEGAL',
+        'stock' => 'Tersedia',
+    ],
+
+    [
+        'productId' => 'UNLI',
+        'name' => 'Panel Unli',
+        'price' => 15000,
+        'description' => 'Paket perminggu. Dengan VPS premium dan LEGAL.',
+        'stock' => 'Tersedia',
+    ],
+    [
+        'productId' => 'Paket Unli',
+        'name' => 'Paket Unli',
+        'price' => 30000,
+        'description' => 'Paket perbulan. Dengan VPS premium dan LEGAL.',
+        'stock' => 'Tersedia',
+    ],
+];
+
+$apiError = null;
+$myOrders = array_filter(
+    read_orders(),
+    fn($o) => hash_equals((string)($o['customer_id'] ?? ''), (string)$_SESSION['customer_id'])
+        && ($o['status'] ?? 'pending') !== 'cancelled'
+);
+$selectedOrder = null;
+if ($invoiceQuery !== '') {
+    if (customer_owns($invoiceQuery)) {
+        $selectedOrder = read_orders()[$invoiceQuery] ?? null;
+    } else {
+        $notice = ['type'=>'error', 'message'=>'Invoice tidak ditemukan di riwayat akun/sesi ini.'];
+    }
+}
+function product_id(array $p): string { return (string)field($p, ['productId','id','slug','code'], ''); }
+function product_name(array $p): string { return (string)field($p, ['name','title'], product_id($p)); }
+function product_price(array $p): mixed { return field($p, ['price','harga'], '-'); }
+function product_stock(array $p): mixed { return field($p, ['stock','stok'], null); }
+?>
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#100707">
+<title><?= h($config['site_name']) ?></title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.php"><span class="brand-mark">X</span><span>Xitercsx<span class="muted"> Panel</span></span></a>
+  <nav><a href="index.php">Beranda</a><a href="index.php?view=products">Produk</a><a href="index.php?view=orders">Order Saya</a></nav>
+</header>
+<main class="container">
+<?php if ($notice): ?><div class="notice <?= h($notice['type']) ?>"><?= h($notice['message']) ?></div><?php endif; ?>
+<?php if ($apiError): ?><div class="notice error"><strong>API belum tersambung:</strong> <?= h($apiError) ?><br><small>Pastikan URL dan API key sudah benar di config.php. Jangan bagikan API key ke siapa pun.</small></div><?php endif; ?>
+
+<?php if ($view === 'home'): ?>
+<section class="hero">
+  <div class="eyebrow"><span class="pulse"></span>PANEL HOSTING</div>
+  <h1>Panel Bot whatsapp kamu,<br><span class="gradient">mulai dari sini.</span></h1>
+  <p>Beli paket panel dengan proses order otomatis, invoice, dan pengecekan pembayaran dalam satu tempat.</p>
+  <div class="actions"><a class="btn primary" href="index.php?view=products">Lihat Paket <span>↗</span></a><a class="btn secondary" href="index.php?view=orders">Riwayat Order</a></div>
+</section>
+<section class="section-head"><div><div class="eyebrow">PILIH PAKET</div><h2>Paket populer</h2></div><a class="text-link" href="index.php?view=products">Lihat semua →</a></section>
+<?php if (!$products): ?><div class="empty">Produk belum dapat dimuat. Periksa koneksi API reseller.</div><?php else: ?>
+<div class="product-grid">
+<?php foreach (array_slice($products, 0, 6) as $p): if (!is_array($p)) continue; ?>
+<article class="product-card">
+  <div class="product-top"><span class="chip">PTERODACTYL</span><span class="status-dot">● Tersedia</span></div>
+  <h3><?= h(product_name($p)) ?></h3><div class="product-id"><?= h(product_id($p)) ?></div>
+  <div class="price"><?= h(money(product_price($p))) ?><small> / paket</small></div>
+  <?php if (product_stock($p) !== null): ?><div class="stock">Stok: <?= h(product_stock($p)) ?></div><?php endif; ?>
+  <?php $desc = field($p, ['description','desc','deskripsi'], 'Paket panel Pterodactyl'); ?>
+  <p><?= h(mb_substr((string)$desc, 0, 120)) ?></p>
+  <a class="btn primary full" href="index.php?view=order&product=<?= rawurlencode(product_id($p)) ?>">Pilih paket <span>→</span></a>
+</article>
+<?php endforeach; ?>
+</div><?php endif; ?>
+
+<?php elseif ($view === 'products'): ?>
+<div class="page-heading"><div class="eyebrow">KATALOG</div><h1>Semua produk</h1><p>Pilih paket sesuai kebutuhan server kamu.</p></div>
+<?php if (!$products): ?><div class="empty">Belum ada produk yang bisa ditampilkan.</div><?php else: ?>
+<div class="product-grid">
+<?php foreach ($products as $p): if (!is_array($p)) continue; ?>
+<article class="product-card">
+  <div class="product-top"><span class="chip">PTERODACTYL</span><?php if (product_stock($p)!==null): ?><span class="stock">Stok <?= h(product_stock($p)) ?></span><?php endif; ?></div>
+  <h3><?= h(product_name($p)) ?></h3><div class="product-id"><?= h(product_id($p)) ?></div>
+  <div class="price"><?= h(money(product_price($p))) ?></div>
+  <p><?= h(mb_substr((string)field($p,['description','desc','deskripsi'],'Paket panel Pterodactyl'),0,140)) ?></p>
+  <a class="btn primary full" href="index.php?view=order&product=<?= rawurlencode(product_id($p)) ?>">Order paket <span>→</span></a>
+</article>
+<?php endforeach; ?>
+</div><?php endif; ?>
+
+<?php elseif ($view === 'order'): ?>
+<?php
+$wanted = (string)($_GET['product'] ?? '');
+$chosen = null;
+foreach ($products as $p) if (is_array($p) && product_id($p) === $wanted) { $chosen = $p; break; }
+?>
+<div class="page-heading"><div class="eyebrow">CHECKOUT</div><h1>Buat order baru</h1><p>Isi data akun panel yang ingin dibuat. Jangan gunakan password akun penting yang lain.</p></div>
+<div class="form-card">
+<?php if (!$chosen): ?><div class="notice error">Produk tidak ditemukan. <a href="index.php?view=products">Kembali ke katalog</a>.</div>
+<?php else: ?>
+<div class="checkout-product"><div><span class="chip">PAKET DIPILIH</span><h2><?= h(product_name($chosen)) ?></h2><code><?= h(product_id($chosen)) ?></code></div><strong><?= h(money(product_price($chosen))) ?></strong></div>
+<form method="post" action="action.php" autocomplete="off">
+<input type="hidden" name="csrf" value="<?= h($_SESSION['csrf']) ?>"><input type="hidden" name="action" value="order"><input type="hidden" name="product_id" value="<?= h(product_id($chosen)) ?>">
+<label>Username panel<input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]+" placeholder="contoh: nabilserver"></label>
+<label>Password panel<input name="password" type="password" required minlength="8" maxlength="72" placeholder="Minimal 8 karakter"><small>Password hanya dikirim ke API saat membuat order dan tidak disimpan di riwayat lokal.</small></label>
+<label>Nomor WhatsApp
+<input name="buyer_phone" type="tel" required inputmode="tel"
+       autocomplete="tel" maxlength="16"
+       pattern="(\\+?62|0)8[0-9]{7,12}"
+       placeholder="08xxxxxxxxxx">
+<small>Masukkan nomor WhatsApp aktif untuk menerima detail login panel.</small>
+</label>
+<label>Email<input name="email" type="email" required maxlength="190" placeholder="nama@email.com"></label>
+<button class="btn primary full" type="submit">Buat invoice <span>→</span></button>
+</form>
+<?php endif; ?>
+</div>
+
+<?php elseif ($view === 'orders'): ?>
+<div class="page-heading"><div class="eyebrow">RIWAYAT</div><h1>Order saya</h1><p>Daftar order yang dibuat dari sesi browser ini.</p></div>
+<?php if (!$myOrders): ?><div class="empty">Belum ada order pada sesi ini. <a href="index.php?view=products">Pilih paket pertama kamu.</a></div>
+<?php else: ?><div class="orders-list">
+<?php foreach (array_reverse($myOrders, true) as $inv => $o): ?>
+<div class="order-row"><div><span class="chip"><?= h(strtoupper((string)($o['status'] ?? 'pending'))) ?></span><h3><?= h($o['product_id'] ?? 'Panel') ?></h3><code><?= h($inv) ?></code><div class="muted small"><?= h(date('d M Y H:i', (int)($o['created_at'] ?? time()))) ?></div></div><div class="order-right"><strong><?= h(money($o['total'] ?? '-')) ?></strong><a class="text-link" href="index.php?view=detail&invoice=<?= rawurlencode((string)$inv) ?>">Detail →</a></div></div>
+<?php endforeach; ?>
+</div><?php endif; ?>
+
+<?php elseif ($invoiceQuery !== '' && $selectedOrder): ?>
+<div class="page-heading"><div class="eyebrow">INVOICE</div><h1>Detail order</h1><p>Invoice: <code><?= h($invoiceQuery) ?></code></p></div>
+<div class="form-card">
+<div class="detail-line"><span>Produk</span><strong><?= h($selectedOrder['product_id'] ?? '-') ?></strong></div>
+<div class="detail-line"><span>Total</span><strong><?= h(money($selectedOrder['total'] ?? '-')) ?></strong></div>
+<div class="payment-box">
+    <h2>Bayar via QRIS DANA</h2>
+    <p>Scan QRIS berikut untuk melakukan pembayaran.</p>
+    <img
+        src="/assets/qris.jpg"
+        alt="QRIS pembayaran"
+        style="display:block;width:100%;max-width:320px;height:auto;margin:20px auto;border-radius:12px;"
+    >
+    <p>Setelah membayar, unggah bukti pembayaran untuk diverifikasi admin.</p>
+</div>
+<?php if (
+    (empty($selectedOrder['payment_proof']) || ($selectedOrder['status'] ?? '') === 'rejected')
+    && in_array(($selectedOrder['status'] ?? 'pending'), ['pending', 'rejected'], true)
+    && empty($selectedOrder['payment_verified'])
+    && empty($selectedOrder['server_created'])
+): ?>
+<form class="form-card" method="post" action="action.php" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="<?= h($_SESSION['csrf']) ?>">
+    <input type="hidden" name="action" value="upload_proof">
+    <input type="hidden" name="invoice" value="<?= h($invoiceQuery) ?>">
+    <label for="payment_proof">Bukti pembayaran (JPG, PNG, WEBP; maksimal 2 MB)</label>
+    <input id="payment_proof" type="file" name="payment_proof" accept="image/jpeg,image/png,image/webp" required>
+    <button class="btn primary" type="submit">Unggah bukti pembayaran</button>
+</form>
+<?php elseif (!empty($selectedOrder['payment_proof'])): ?>
+<p class="muted small">Bukti sudah diterima. Status tetap menunggu verifikasi admin.</p>
+<?php endif; ?>
+<?php if (
+    in_array(($selectedOrder['status'] ?? ''), ['pending', 'rejected'], true)
+    && empty($selectedOrder['payment_verified'])
+    && empty($selectedOrder['server_created'])
+): ?>
+<?php endif; ?>
+
+<?php if (($selectedOrder['status'] ?? '') === 'rejected'): ?>
+<div class="payment-box">
+    <h3>Bukti pembayaran ditolak</h3>
+    <p><?= h($selectedOrder['rejection_reason'] ?? 'Silakan unggah bukti pembayaran yang benar.') ?></p>
+    <p>Unggah bukti pengganti melalui formulir di atas jika pembayaran sudah dilakukan.</p>
+</div>
+<?php endif; ?>
+<div class="detail-line"><span>Status terakhir</span><strong><?= h($selectedOrder['status'] ?? 'pending') ?></strong></div>
+<div class="detail-line"><span>Dibuat</span><strong><?= h(date('d M Y H:i', (int)($selectedOrder['created_at'] ?? time()))) ?></strong></div>
+<div class="actions">
+<form method="post" action="action.php"><input type="hidden" name="csrf" value="<?= h($_SESSION['csrf']) ?>"><input type="hidden" name="action" value="check_payment"><input type="hidden" name="invoice" value="<?= h($invoiceQuery) ?>"><button class="btn primary" type="submit">Cek pembayaran</button></form>
+<form method="post" action="action.php"
+      onsubmit="return confirm('Yakin ingin membatalkan pesanan ini? Pastikan pembayaran belum berhasil. Pesanan akan hilang dari daftar aktif.');">
+    <input type="hidden" name="csrf" value="<?= h($_SESSION['csrf']) ?>">
+    <input type="hidden" name="action" value="cancel_order">
+    <input type="hidden" name="invoice" value="<?= h($invoiceQuery) ?>">
+    <button class="btn secondary" type="submit">Batalkan Pesanan</button>
+</form>
+</div>
+<p class="muted small">Data panel lengkap hanya akan ditampilkan setelah API mengizinkan akses. Jangan bagikan invoice kepada orang lain.</p>
+</div>
+<?php else: ?>
+<div class="empty">Halaman tidak ditemukan. <a href="index.php">Kembali ke beranda.</a></div>
+<?php endif; ?>
+
+<footer><div class="brand"><span class="brand-mark">X</span> Xitercsx Panel</div><p>Panel hosting dengan proses order otomatis.</p></footer>
+</main>
+</body></html>

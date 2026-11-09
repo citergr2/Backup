@@ -1,0 +1,212 @@
+<?php
+declare(strict_types=1);
+require __DIR__ . '/lib.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    exit('Method not allowed');
+}
+
+try {
+    csrf_check();
+    $action = (string)($_POST['action'] ?? '');
+
+    if ($action === 'order') {
+        $productId = trim((string)($_POST['product_id'] ?? ''));
+        $username = trim((string)($_POST['username'] ?? ''));
+        $email = trim((string)($_POST['email'] ?? ''));
+        $buyerPhone = preg_replace('/[\\s().-]+/', '', trim((string)($_POST['buyer_phone'] ?? ''))) ?? '';
+
+        if (str_starts_with($buyerPhone, '+')) {
+            $buyerPhone = substr($buyerPhone, 1);
+        }
+
+        if (str_starts_with($buyerPhone, '0')) {
+            $buyerPhone = '62' . substr($buyerPhone, 1);
+        }
+
+        $catalog = [
+    '1Gb' => [
+        'name' => 'Panel 1Gb',
+        'price' => 5000
+    ],
+    '2Gb' => [
+        'name' => 'Panel 2Gb',
+        'price' => 7000
+    ],
+    '3Gb' => [
+        'name' => 'Panel 3Gb',
+        'price' => 9000
+    ],
+    '4Gb' => [
+        'name' => 'Panel 4Gb',
+        'price' => 11000
+    ],
+    'UNLI' => [
+        'name' => 'Panel Unli',
+        'price' => 15000
+    ],
+    'Paket Unli' => [
+        'name' => 'Paket Unli',
+        'price' => 30000
+    ],
+];
+
+        if (!isset($catalog[$productId])) {
+            throw new RuntimeException('Paket tidak ditemukan.');
+        }
+        if (!preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $username)) {
+            throw new RuntimeException('Username panel tidak valid.');
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('Format email tidak valid.');
+        }
+        if (!preg_match('/^628[0-9]{7,11}$/', $buyerPhone)) {
+            throw new RuntimeException('Nomor WhatsApp tidak valid. Gunakan nomor Indonesia, contoh 081234567890.');
+        }
+
+        $invoice = 'XC-' . date('Ymd') . '-' . strtoupper(bin2hex(random_bytes(4)));
+
+        save_order($invoice, [
+            'product_id' => $productId,
+            'product_name' => $catalog[$productId]['name'],
+            'username' => $username,
+            'email' => $email,
+            'buyer_phone' => $buyerPhone,
+            'total' => $catalog[$productId]['price'],
+            'status' => 'pending',
+            'payment_method' => 'QRIS DANA',
+            'payment_verified' => false,
+            'server_created' => false,
+        ]);
+
+        flash('success', 'Invoice ' . $invoice . ' berhasil dibuat. Status: menunggu pembayaran.');
+        header('Location: index.php?view=detail&invoice=' . rawurlencode($invoice));
+        exit;
+    }
+
+    $invoice = trim((string)($_POST['invoice'] ?? ''));
+    if ($invoice === '' || !customer_owns($invoice)) {
+        throw new RuntimeException('Invoice tidak ditemukan di sesi ini.');
+    }
+
+    if ($action === 'cancel_order') {
+        $orders = read_orders();
+        $order = $orders[$invoice] ?? null;
+
+        if (!is_array($order)) {
+            throw new RuntimeException('Pesanan tidak ditemukan.');
+        }
+
+        $status = (string)($order['status'] ?? '');
+
+        if (!in_array($status, ['pending', 'rejected'], true) ||
+            !empty($order['payment_verified']) ||
+            !empty($order['server_created']) ||
+            ($status === 'pending' && !empty($order['payment_proof']))) {
+            throw new RuntimeException(
+                'Pesanan tidak bisa dibatalkan karena pembayaran sudah diproses atau server sudah dibuat.'
+            );
+        }
+
+        save_order($invoice, [
+            'status' => 'cancelled',
+            'cancelled_at' => time(),
+        ]);
+
+        flash('success', 'Pesanan berhasil dibatalkan.');
+        header('Location: index.php');
+        exit;
+    }
+
+    if ($action === 'upload_proof') {
+        if (!isset($_FILES['payment_proof']) ||
+            !is_array($_FILES['payment_proof'])) {
+            throw new RuntimeException('Pilih gambar bukti pembayaran.');
+        }
+
+        $file = $_FILES['payment_proof'];
+        if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            throw new RuntimeException('Upload gagal. Pastikan ukuran gambar maksimal 2 MB.');
+        }
+        if (($file['size'] ?? 0) < 1 || $file['size'] > 2 * 1024 * 1024) {
+            throw new RuntimeException('Ukuran gambar harus 2 MB atau kurang.');
+        }
+
+        $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
+        $allowed = [
+            'image/jpeg' => 'jpg',
+            'image/png'  => 'png',
+            'image/webp' => 'webp',
+        ];
+        if (!isset($allowed[$mime])) {
+            throw new RuntimeException('Format bukti harus JPG, PNG, atau WEBP.');
+        }
+
+        $image = @getimagesize($file['tmp_name']);
+        if ($image === false) {
+            throw new RuntimeException('File bukan gambar yang valid.');
+        }
+
+        $orders = read_orders();
+        $order = $orders[$invoice] ?? null;
+        if (!is_array($order)) {
+            throw new RuntimeException('Order tidak ditemukan.');
+        }
+        $wasRejected = ($order['status'] ?? '') === 'rejected';
+
+        if (!empty($order['payment_proof']) && !$wasRejected) {
+            throw new RuntimeException('Bukti pembayaran untuk invoice ini sudah diunggah.');
+        }
+        if ((!$wasRejected && ($order['status'] ?? '') !== 'pending') ||
+            !empty($order['payment_verified']) ||
+            !empty($order['server_created'])) {
+            throw new RuntimeException('Order ini tidak menerima bukti pembayaran baru.');
+        }
+
+        $proofDir = $config['data_dir'] . '/payment-proofs';
+        if (!is_dir($proofDir) &&
+            !mkdir($proofDir, 0700, true) && !is_dir($proofDir)) {
+            throw new RuntimeException('Folder bukti pembayaran tidak tersedia.');
+        }
+
+        $proofName = bin2hex(random_bytes(16)) . '.' . $allowed[$mime];
+        $destination = $proofDir . '/' . $proofName;
+        if (!move_uploaded_file($file['tmp_name'], $destination)) {
+            throw new RuntimeException('Gagal menyimpan bukti pembayaran.');
+        }
+        chmod($destination, 0600);
+
+        try {
+            save_order($invoice, [
+                'payment_proof' => $proofName,
+                'payment_proof_mime' => $mime,
+                'payment_proof_uploaded_at' => time(),
+                'payment_verified' => false,
+                'status' => 'pending',
+                'proof_notified_at' => null,
+                'rejection_reason' => null,
+                'rejected_at' => null,
+            ]);
+        } catch (Throwable $e) {
+            @unlink($destination);
+            throw $e;
+        }
+
+        flash('success', 'Bukti berhasil diunggah. Pembayaran menunggu verifikasi admin.');
+        header('Location: index.php?view=detail&invoice=' . rawurlencode($invoice));
+        exit;
+    }
+
+    if ($action === 'check_payment') {
+        flash('success', 'Pembayaran masih menunggu verifikasi admin.');
+        header('Location: index.php?view=detail&invoice=' . rawurlencode($invoice));
+        exit;
+    }
+
+    throw new RuntimeException('Aksi tidak dikenal.');
+} catch (Throwable $e) {
+    flash('error', $e->getMessage());
+    header('Location: index.php');
+    exit;
+}

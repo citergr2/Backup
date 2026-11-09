@@ -1,0 +1,75 @@
+<?php
+declare(strict_types=1);
+require __DIR__ . '/lib.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    exit('Method not allowed');
+}
+try {
+    csrf_check();
+    $action = (string)($_POST['action'] ?? '');
+    if ($action === 'order') {
+        $productId = trim((string)($_POST['product_id'] ?? ''));
+        $username = trim((string)($_POST['username'] ?? ''));
+        $password = (string)($_POST['password'] ?? '');
+        $email = trim((string)($_POST['email'] ?? ''));
+        if ($productId === '' || !preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $username)) throw new RuntimeException('ID produk atau username tidak valid.');
+        if (strlen($password) < 8 || strlen($password) > 72) throw new RuntimeException('Password harus 8–72 karakter.');
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) throw new RuntimeException('Format email tidak valid.');
+
+        $res = api_request('POST', 'create-order', [
+            'productId' => $productId,
+            'username' => $username,
+            'password' => $password,
+            'email' => $email,
+        ]);
+        // Jangan log password. Hanya simpan data invoice non-rahasia.
+        $d = unwrap_data($res);
+        if (!is_array($d)) $d = [];
+        $invoice = (string)field($d, ['invoice','invoiceId','orderId','trxId','id'], '');
+        if ($invoice === '') throw new RuntimeException('Order terkirim, tetapi API tidak mengembalikan nomor invoice. Hubungi admin sebelum mencoba order ulang.');
+        save_order($invoice, [
+            'product_id' => $productId,
+            'username' => $username,
+            'email' => $email,
+            'total' => field($d, ['total','totalPayment','amount','price','grossAmount'], null),
+            'status' => field($d, ['status','paymentStatus'], 'pending'),
+            'payment_url' => field($d, ['paymentUrl','payment_url','checkoutUrl','checkout_url','url','link'], null),
+            'qr_url' => field($d, ['qrUrl','qr_url','qrImage','qrisUrl','qris_url'], null),
+        ]);
+        flash('success', 'Invoice berhasil dibuat: ' . $invoice . '. Simpan nomor invoice ini untuk mengecek pembayaran.');
+        header('Location: index.php?view=detail&invoice=' . rawurlencode($invoice));
+        exit;
+    }
+
+    $invoice = trim((string)($_POST['invoice'] ?? ''));
+    if ($invoice === '' || !customer_owns($invoice)) throw new RuntimeException('Invoice tidak ditemukan atau bukan milik sesi ini.');
+    if ($action === 'check_payment') {
+        $d = unwrap_data(api_request('GET', 'check-payment/' . rawurlencode($invoice)));
+        if (!is_array($d)) $d = [];
+        save_order($invoice, [
+            'status' => field($d, ['status','paymentStatus'], 'unknown'),
+            'total' => field($d, ['total','totalPayment','amount','price','grossAmount'], null),
+        ]);
+        $info = [];
+        foreach (['status','paymentStatus','total','totalPayment','amount','expiredAt','expiresAt','paymentUrl','checkoutUrl','url'] as $k) {
+            if (isset($d[$k]) && is_scalar($d[$k])) $info[] = $k . ': ' . (string)$d[$k];
+        }
+        flash('success', 'Hasil cek pembayaran: ' . ($info ? implode(' | ', $info) : 'Respons diterima dari API.'));
+        redirect_home();
+    }
+    if ($action === 'detail') {
+        $d = unwrap_data(api_request('GET', 'order-detail/' . rawurlencode($invoice)));
+        // Avoid exposing raw secrets/passwords if the API returns them.
+        $json = json_encode($d, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        $json = preg_replace('/("(?:password|apikey|api_key|token|secret)"\s*:\s*)"(?:[^"\\\\]|\\\\.)*"/i', '$1"••••••"', $json ?? '');
+        $_SESSION['detail_result'] = $json ?: 'Detail diterima, tetapi tidak bisa diformat.';
+        flash('success', 'Detail order diterima dari API. Lihat hasil di bawah.');
+        redirect_home();
+    }
+    throw new RuntimeException('Aksi tidak dikenal.');
+} catch (Throwable $e) {
+    flash('error', $e->getMessage());
+    redirect_home();
+}

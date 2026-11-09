@@ -1,0 +1,70 @@
+<?php
+declare(strict_types=1);
+require __DIR__ . '/lib.php';
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    exit('Method not allowed');
+}
+
+try {
+    csrf_check();
+    $action = (string)($_POST['action'] ?? '');
+
+    if ($action === 'order') {
+        $productId = trim((string)($_POST['product_id'] ?? ''));
+        $username = trim((string)($_POST['username'] ?? ''));
+        $email = trim((string)($_POST['email'] ?? ''));
+
+        $catalog = [
+            'starter' => ['name' => 'Starter Bot', 'price' => 5000],
+            'standard' => ['name' => 'Standard Bot', 'price' => 10000],
+            'pro' => ['name' => 'Pro Bot', 'price' => 20000],
+        ];
+
+        if (!isset($catalog[$productId])) {
+            throw new RuntimeException('Paket tidak ditemukan.');
+        }
+        if (!preg_match('/^[A-Za-z0-9_.-]{3,32}$/', $username)) {
+            throw new RuntimeException('Username panel tidak valid.');
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('Format email tidak valid.');
+        }
+
+        $invoice = 'XC-' . date('Ymd') . '-' . strtoupper(bin2hex(random_bytes(4)));
+
+        save_order($invoice, [
+            'product_id' => $productId,
+            'product_name' => $catalog[$productId]['name'],
+            'username' => $username,
+            'email' => $email,
+            'total' => $catalog[$productId]['price'],
+            'status' => 'pending',
+            'payment_method' => 'QRIS DANA',
+            'payment_verified' => false,
+            'server_created' => false,
+        ]);
+
+        flash('success', 'Invoice ' . $invoice . ' berhasil dibuat. Status: menunggu pembayaran.');
+        header('Location: index.php?view=detail&invoice=' . rawurlencode($invoice));
+        exit;
+    }
+
+    $invoice = trim((string)($_POST['invoice'] ?? ''));
+    if ($invoice === '' || !customer_owns($invoice)) {
+        throw new RuntimeException('Invoice tidak ditemukan di sesi ini.');
+    }
+
+    if ($action === 'check_payment') {
+        flash('success', 'Pembayaran masih menunggu verifikasi admin.');
+        header('Location: index.php?view=detail&invoice=' . rawurlencode($invoice));
+        exit;
+    }
+
+    throw new RuntimeException('Aksi tidak dikenal.');
+} catch (Throwable $e) {
+    flash('error', $e->getMessage());
+    header('Location: index.php');
+    exit;
+}
